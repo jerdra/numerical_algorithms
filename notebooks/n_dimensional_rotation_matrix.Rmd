@@ -1,0 +1,168 @@
+---
+title: "N_dimensional_rotation_matrix"
+author: "nforde"
+date: "September 27, 2019"
+output: html_document
+---
+# load required libraries
+```{r load libraries}
+library(tidyverse)
+library(mosaic)
+
+```
+
+# Reverse givens
+```{r}
+compute_reverse_givens <- function(a) {  #a is 2d vector
+    
+  # Define <a> to be a vector in 2 dimensional space. 
+  # Find the rotation matrix that aligns a to the axis z = [0,r] 
+  # Where r is the magnitude of <a>
+  # 
+  # This method is a slight variation (x_j = x_N instead of x_j = x_1) of
+  # N-dimensional Rotation Matrix Generation Algorithm
+  # (Zhelezov, O.I 2017)
+    
+  hyp <- sqrt(((a[1]^2) + (a[2]^2)))  # magnitude sqrt(sum(x^2)) or hypot from pracma package
+  if (hyp^2 > 0) { #greater than ignore floating pt error
+    s_k <- a[1]/hyp
+    c_k <- a[2]/hyp
+  } else {
+     s_k <- 1
+     c_k <- 0
+  }
+  return(matrix(c(c_k, s_k, -s_k, c_k), nrow=2))
+}	
+```  
+# Reverse algorithm
+```{r}
+rotate_coords <- function(q) { #takes q (shitty estimate of centroid) and aligns to last axis and outputs transform
+  N <- length(q)
+  G <- diag(N) #identity matrix
+  x_bar <- q
+    for (k in 1:(N-1)){
+    
+      G_k <- diag(N)
+      G_k[k:(k+1),k:(k+1)] <- compute_reverse_givens(x_bar[k:(k+1)])
+    
+      x_bar <- G_k %*% x_bar
+      G <- G_k %*% G
+      #print(k)
+    }
+  return(G)
+}
+```
+# Inverse exponential
+```{r inverse exponential}
+inverse_exponential <- function(q,p) {
+  # 
+  # Let <q> and <p> be two unit vectors.
+  # Where:
+  #     <q> should be aligned to the x_N axis
+  #     <p> is another vector that we want to map to the tangential hyperplane
+  # 
+  # The inverse exponential map takes a point <p> and finds the angular rotation component
+  # between <q> and the x_i component of <p>. This returns the x_i' component of l(p) in the
+  # tangential hyperplane. 
+  # 
+  
+  #Make output vector (we lose the d+1 component)
+  
+  l_p <- matrix(0, nrow = 1, ncol = (length(q)-1)) #array of Zeros 1 less than dim p
+  
+  #For each angular component on the sphere, find the corresponding euclidean component  
+  for (i in (1:(length(q)-1))) {
+    
+    #Compute the cosine angle in radians
+    r <- acos((t(q)%*%t(t(p)))) #
+    
+    #Project into the tangent hyperplane to get the x_i' component
+    l_p[i] <- p[i] * (r/sin(r))
+  }  
+  return(l_p)
+}
+```
+# Exponential map
+```{r exponential map}
+exponential_map <- function(q,p) {
+
+  # Let <q> and <p> be two vectors lying in a hyperplane. 
+  # Where:
+  #     <q> is a vector in euclidean space lying on an n-sphere
+  #     <p> is some vector lying on a hyperplane that is tangential to the n-sphere at <q>
+  # 
+  # The exponential map takes a point <p> on the hyperplane and computes a point on the n-sphere
+  # that preserves euclidean distances in the form of angular distances between <q> and <p>. 
+
+  #Make output vector (has n dimensions)
+  exp_p <- array(rep(0, length(q)))
+  
+  #Compute the total distance of p from q in the tangential hyperplane
+  r <- sqrt(sum(p^2))
+  
+  #Calculate the multiplier sin(r)/r. 
+  #This if condition is mentioned in the spherical means paper pg. 11 at the bottom
+  if (r>0) {
+      m <- sin(r)/r
+  } else {
+    m <- 1
+  }
+  for (i in 1:(length(q))) {
+    exp_p[i] <- p[i] * m
+  }
+  #Compute the last component
+  exp_p[(length(q))] <- cos(r)
+  
+  return(exp_p)
+}
+```
+# unitize vector
+```{r unit}
+unit1 <- function(x) {x / sqrt(sum(x^2))} #where x is the vector to normalise
+```
+# Centroid calculation
+```{r centroid}
+
+cent <- function(x, max.iter) {
+  
+  #def shitty mean as initial centroid
+  q <- colMeans(x) %>% unit1() 
+  
+  for (m in 1:max.iter) {
+  
+    #get transform of q to hyperplane origin (0,0....1)
+    Gxform <- rotate_coords(q)
+    
+    #apply rotation to all data points
+    qrot <- Gxform %*% q
+    xrot <- Gxform %*% t(x) 
+    
+    p_est <- matrix(NA, nrow = ncol(xrot), ncol = (length(qrot)-1))
+    for (i in 1:ncol(xrot)) { 
+      #calculate angular distance for each point to q on hyperplane
+      p_est[i,] <- inverse_exponential(qrot,xrot[,i]) 
+    }
+  
+    u <- (colSums(p_est - qrot[1:(length(qrot)-1)])) / (ncol(xrot))
+    qrot_updated <- qrot[1:(length(qrot)-1)] + u
+    qrot_new <- exponential_map(qrot, qrot_updated)
+    Gxform_inv <- ginv(Gxform)
+    q <- Gxform_inv %*% qrot_new
+  
+    if (sqrt(sum(u^2)) <0.00001) {   # If ||u|| is sufficiently small, output q and halt, otherwise continue looping.
+      break
+    }
+  }
+  return(q)
+}
+```
+# calculate cosine angle 
+returns cosine angle between vectors in degrees
+```{r}
+cos.dist <- function(x, iter){
+  y <- cent(x, iter)
+  sim <- as.matrix(x) %*% y 
+  deg <- acos(sim) * 180/pi
+  return(deg) 
+}
+```
